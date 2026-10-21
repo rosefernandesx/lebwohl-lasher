@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+build/
+*.so
+*.c
+*.html
+.DS_Store
+prof*.txt
+*.png
