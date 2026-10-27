@@ -9,7 +9,7 @@ This version in 2D.
 
 Run at the command line by typing:
 
-python setup.py 
+python setup.py build_ext -fi
 python run.py <ITERATIONS> <SIZE> <TEMPERATURE> <PLOTFLAG>
 
 where:
@@ -33,6 +33,10 @@ import datetime
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib as mpl
+
+cimport numpy as cnp
+cimport cython
+from libc.math cimport cos, exp
 
 #=======================================================================
 def initdat(nmax):
@@ -133,6 +137,8 @@ def savedat(arr,nsteps,Ts,runtime,ratio,energy,order,nmax):
         print("   {:05d}    {:6.4f} {:12.4f}  {:6.4f} ".format(i,ratio[i],energy[i],order[i]),file=FileOut)
     FileOut.close()
 #=======================================================================
+@cython.boundscheck(False)
+@cython.wraparound(False)
 def one_energy(arr,ix,iy,nmax):
     """
     Arguments:
@@ -148,7 +154,10 @@ def one_energy(arr,ix,iy,nmax):
 	Returns:
 	  en (float) = reduced energy of cell.
     """
-    en = 0.0
+
+    cdef double ang
+    cdef double en = 0.0
+
     ixp = (ix+1)%nmax # These are the coordinates
     ixm = (ix-1)%nmax # of the neighbours
     iyp = (iy+1)%nmax # with wraparound
@@ -167,6 +176,8 @@ def one_energy(arr,ix,iy,nmax):
     en += 0.5*(1.0 - 3.0*np.cos(ang)**2)
     return en
 #=======================================================================
+@cython.boundscheck(False)
+@cython.wraparound(False)
 def all_energy(arr,nmax):
     """
     Arguments:
@@ -178,7 +189,7 @@ def all_energy(arr,nmax):
 	Returns:
 	  enall (float) = reduced energy of lattice.
     """
-    enall = 0.0
+    cdef double enall = 0.0
     for i in range(nmax):
         for j in range(nmax):
             enall += one_energy(arr,i,j,nmax)
