@@ -137,9 +137,12 @@ def savedat(arr,nsteps,Ts,runtime,ratio,energy,order,nmax):
         print("   {:05d}    {:6.4f} {:12.4f}  {:6.4f} ".format(i,ratio[i],energy[i],order[i]),file=FileOut)
     FileOut.close()
 #=======================================================================
-@cython.boundscheck(False)
-@cython.wraparound(False)
-def one_energy(arr,ix,iy,nmax):
+cdef inline double one_energy(
+    double[:, ::1] arr,
+    Py_ssize_t ix,
+    Py_ssize_t iy,
+    Py_ssize_t nmax
+) noexcept nogil:
     """
     Arguments:
 	  arr (float(nmax,nmax)) = array that contains lattice data;
@@ -154,26 +157,38 @@ def one_energy(arr,ix,iy,nmax):
 	Returns:
 	  en (float) = reduced energy of cell.
     """
-
-    cdef double ang
     cdef double en = 0.0
+    cdef double ang
+    cdef double c
+    cdef Py_ssize_t ixp, ixm, iyp, iym
 
-    ixp = (ix+1)%nmax # These are the coordinates
-    ixm = (ix-1)%nmax # of the neighbours
-    iyp = (iy+1)%nmax # with wraparound
-    iym = (iy-1)%nmax #
+    # Periodic boundary conditions
+    ixp = 0 if ix == nmax-1 else ix+1
+    ixm = nmax-1 if ix==0 else ix-1
+    iyp = 0 if iy == nmax-1 else iy+1
+    iym = nmax-1 if iy == 0 else iy-1
 #
 # Add together the 4 neighbour contributions
 # to the energy
 #
+    # Updated to use cos from libc.math instead of numpy
+    # Also avoids using square
     ang = arr[ix,iy]-arr[ixp,iy]
-    en += 0.5*(1.0 - 3.0*np.cos(ang)**2)
+    c = cos(ang)
+    en += 0.5*(1.0 - 3.0*c*c)
+
     ang = arr[ix,iy]-arr[ixm,iy]
-    en += 0.5*(1.0 - 3.0*np.cos(ang)**2)
+    c = cos(ang)
+    en += 0.5*(1.0 - 3.0*c*c)
+
     ang = arr[ix,iy]-arr[ix,iyp]
-    en += 0.5*(1.0 - 3.0*np.cos(ang)**2)
+    c = cos(ang)
+    en += 0.5*(1.0 - 3.0*c*c)
+
     ang = arr[ix,iy]-arr[ix,iym]
-    en += 0.5*(1.0 - 3.0*np.cos(ang)**2)
+    c = cos(ang)
+    en += 0.5*(1.0 - 3.0*c*c)
+
     return en
 #=======================================================================
 @cython.boundscheck(False)
