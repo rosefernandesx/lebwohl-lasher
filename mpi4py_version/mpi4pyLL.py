@@ -267,9 +267,9 @@ def MC_step(arr,Ts,nmax,offset,rows,above,below,rng):
     accept = 0
     nhalf = nmax//2
     for parity in range(2):
-        exchange_halos|(arr,nmax,offset,rows,above,below)
-        xran = rng.intergers(offset,high=offset+rows,size=(rows,nhalf))
-        yran = rng.integeres(0,high=nhalf,size=(rows,nhalf))
+        exchange_halos(arr,nmax,offset,rows,above,below)
+        xran = rng.integers(offset,high=offset+rows,size=(rows,nhalf))
+        yran = rng.integers(0,high=nhalf,size=(rows,nhalf))
         aran = rng.normal(scale=scale, size = (rows,nhalf))
         for i in range(rows):
             for j in range(nhalf):
@@ -307,7 +307,7 @@ def main(program, nsteps, nmax, temp, pflag):
     """
     if numworkers<1 or nmax%2!=0 or nmax<numworkers:
         if taskid==MASTER:
-            print(f"Need a minimum of two tasks, an even size and size >= number of workers: tasks={numtasks}, SIZE={max}")
+            print(f"Need a minimum of two tasks, an even size and size >= number of workers: tasks={numtasks}, SIZE={nmax}")
             sys.exit(1)
 
     lattice = np.zeros((nmax,nmax))
@@ -324,7 +324,7 @@ def main(program, nsteps, nmax, temp, pflag):
         # Calculate rows for workers and send them out
         averow = nmax//numworkers
         extra = nmax%numworkers
-        seed = np.ranodm.SeedSequence().entropy
+        seed = np.random.SeedSequence().entropy
         offset = 0
         for i in range(1,numworkers+1):
             rows=averow
@@ -337,12 +337,12 @@ def main(program, nsteps, nmax, temp, pflag):
             comm.send(above, dest=i, tag=BEGIN)
             comm.send(below, dest=i, tag=BEGIN)
             comm.send(seed, dest=i, tag=BEGIN)
-            comm.send([lattice[offset:offset+rows,:],rows*nmax,MPI.DOUBLE],dest=i, tag=BEGIN)
+            comm.Send([lattice[offset:offset+rows,:],rows*nmax,MPI.DOUBLE],dest=i, tag=BEGIN)
             offset += rows
 
         # Begin doing and timing some MC steps.
         stats=np.zeros(NSTATS)
-        comm.Barrier
+        comm.Barrier()
         initial = time.time()
         for it in range(1,nsteps+1):
             tot = np.zeros(NSTATS)
@@ -408,6 +408,6 @@ if __name__ == '__main__':
         TEMPERATURE = float(sys.argv[3])
         PLOTFLAG = int(sys.argv[4])
         main(PROGNAME, ITERATIONS, SIZE, TEMPERATURE, PLOTFLAG)
-    elif taskif==MASTER:
+    elif taskid==MASTER:
         print("Usage: mpiexec -n <NTASKS> python {} <ITERATIONS> <SIZE> <TEMPERATURE> <PLOTFLAG>".format(sys.argv[0]))
 #=======================================================================
