@@ -1,8 +1,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
 
-# Corresponding cell sizes for your timing data
-sizes = np.array([10, 100, 1000, 10000]) # adjust to match your actual sizes length
+sizes = np.array([10, 100, 1000, 10000])
 
 original = np.array([0.042890, 3.881494, 447.790748])
 threads_2 = np.array([0.033087, 0.054180, 1.835662])
