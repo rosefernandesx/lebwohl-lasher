@@ -23,6 +23,10 @@ SH 16-Oct-23
 
 Updated to accelerate code via Numba.
 
+Run at CL with:
+
+OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 python NumbaLL.py 50 10 1.0 0
+
 RF 9-11-26
 """
 
