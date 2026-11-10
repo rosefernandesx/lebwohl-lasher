@@ -9,8 +9,7 @@ This version in 2D.
 
 Run at the command line by typing:
 
-python setup.py build_ext -fi
-python run.py <ITERATIONS> <SIZE> <TEMPERATURE> <PLOTFLAG>
+python LebwohlLasher.py <ITERATIONS> <SIZE> <TEMPERATURE> <PLOTFLAG>
 
 where:
   ITERATIONS = number of Monte Carlo steps, where 1MCS is when each cell
@@ -23,6 +22,13 @@ The initial configuration is set at random. The boundaries
 are periodic throughout the simulation.  During the
 time-stepping, an array containing two domains is used; these
 domains alternate between old data and new data.
+
+Run at CL with:
+
+Run at the command line by typing:
+
+python setup.py build_ext -fi
+python run.py <ITERATIONS> <SIZE> <TEMPERATURE> <PLOTFLAG>
 
 RF 27-10-2026
 """

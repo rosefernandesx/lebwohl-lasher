@@ -23,7 +23,7 @@ SH 16-Oct-23
 
 The code has been updated to port to mpi4py and run on multiple cores.
 
-Run with:
+Run at CL with:
     mpiexec -n <NPROCS> python mpi4pyLL.py <ITERATIONS> <SIZE> <TEMPERATURE> <PLOTFLAG>
 
 RF 5-11-26

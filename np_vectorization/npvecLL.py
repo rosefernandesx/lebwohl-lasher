@@ -23,6 +23,9 @@ SH 16-Oct-23
 
 Code was updated to allow for NumPy Vectorization speed ups
 
+Run at CL with:
+python npvecLL.py <ITERATIONS> <SIZE> <TEMPERATURE> <PLOTFLAG>
+
 RF 09-Nov-26
 """
 
