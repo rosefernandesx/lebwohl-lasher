@@ -34,7 +34,7 @@ import matplotlib.pyplot as plt
 import matplotlib as mpl
 import scipy
 
-from numba import jit, prange
+from numba import jit, prange, vectorize, guvectorize, float64, int32
 
 
 #=======================================================================
@@ -137,6 +137,30 @@ def savedat(arr,nsteps,Ts,runtime,ratio,energy,order,nmax):
         print("   {:05d}    {:6.4f} {:12.4f}  {:6.4f} ".format(i,ratio[i],energy[i],order[i]),file=FileOut)
     FileOut.close()
 #=======================================================================
+# @vectorize(['float64(float64)'], target='parallel')
+# def energy_term(ang):
+#     return 0.5*(1.0-3.0*np.cos(ang)**2)
+@vectorize(['float64(float64)'], target='parallel')
+def pair_energy(ang):
+    return 0.5 * (1.0 - 3.0 * np.cos(ang) ** 2)
+
+def site_energy_grid(arr):
+    """
+    Return the local energy at every lattice site using array operations.
+    np.roll implements the same periodic boundaries as the modulo
+    operations in one_energy().
+    """
+    right = np.roll(arr, -1, axis=0)
+    left = np.roll(arr, 1, axis=0)
+    up = np.roll(arr, -1, axis=1)
+    down = np.roll(arr, 1, axis=1)
+
+    en = pair_energy(arr - right)
+    en += pair_energy(arr - left)
+    en += pair_energy(arr - up)
+    en += pair_energy(arr - down)
+    return en
+#=======================================================================
 @jit(nopython=True)
 def one_energy(arr,ix,iy,nmax):
     """
@@ -162,17 +186,15 @@ def one_energy(arr,ix,iy,nmax):
 # Add together the 4 neighbour contributions
 # to the energy
 #
-    ang = arr[ix,iy]-arr[ixp,iy]
-    en += 0.5*(1.0 - 3.0*np.cos(ang)**2)
-    ang = arr[ix,iy]-arr[ixm,iy]
-    en += 0.5*(1.0 - 3.0*np.cos(ang)**2)
-    ang = arr[ix,iy]-arr[ix,iyp]
-    en += 0.5*(1.0 - 3.0*np.cos(ang)**2)
-    ang = arr[ix,iy]-arr[ix,iym]
-    en += 0.5*(1.0 - 3.0*np.cos(ang)**2)
-    return en
+    angs = np.array([
+        arr[ix,iy] - arr[ixp,iy],
+        arr[ix,iy] - arr[ixm,iy],
+        arr[ix,iy] - arr[ix,iyp],
+        arr[ix,iy] - arr[ix,iym]
+    ])
+    return np.sum(0.5 * (1.0 - 3.0 * np.cos(angs)**2))
 #=======================================================================
-@jit(nopython=True, parallel=True)
+@jit(nopython=True)
 def all_energy(arr,nmax):
     """
     Arguments:
@@ -184,13 +206,10 @@ def all_energy(arr,nmax):
 	Returns:
 	  enall (float) = reduced energy of lattice.
     """
-    enall = 0.0
-    for i in prange(nmax):
-        for j in prange(nmax):
-            enall += one_energy(arr,i,j,nmax)
+    enall = np.sum(site_energy_grid)
     return enall
 #=======================================================================
-@jit(nopython=True)
+@jit(nopython=True, parallel=True)
 def get_order(arr,nmax):
     """
     Arguments:
@@ -209,15 +228,57 @@ def get_order(arr,nmax):
     # Generate a 3D unit vector for each cell (i,j) and
     # put it in a (3,i,j) array.
     #
-    lab = np.vstack((np.cos(arr),np.sin(arr),np.zeros_like(arr))).reshape(3,nmax,nmax)
-    for a in prange(3):
-        for b in prange(3):
-            for i in prange(nmax):
-                for j in prange(nmax):
-                    Qab[a,b] += 3*lab[a,i,j]*lab[b,i,j] - delta[a,b]
+
+    lab = np.empty((3, nmax, nmax))
+    lab[0, :, :] = np.cos(arr)
+    lab[1, :, :] = np.sin(arr)
+    lab[2, :, :] = 0.0
+
+    for ab in prange(9):
+        a = ab // 3
+        b = ab % 3
+        component_sum = 0.0
+
+        for i in range(nmax):
+            for j in range(nmax):
+                component_sum += (
+                    3.0 * lab[a, i, j] * lab[b, i, j] - delta[a, b]
+                )
+
+        Qab[a, b] = component_sum
+
+    
     Qab = Qab/(2*nmax*nmax)
     eigenvalues,eigenvectors = np.linalg.eigh(Qab)
     return eigenvalues.max()
+#=======================================================================
+@jit(nopython=True)
+def _attempt_update(arr, ix, iy, Ts, nmax, scale):
+    """
+    Attempt one trial rotation. Returns 1 if accepted and 0 otherwise.
+
+    one_energy counts each bond twice across the lattice. Therefore the
+    physical change in total unique-bond energy is half the local-energy
+    difference. This factor is included in the Metropolis probability.
+    """
+    ang = np.random.normal(0.0, scale)
+    en0 = one_energy(arr, ix, iy, nmax)
+
+    arr[ix, iy] += ang
+    en1 = one_energy(arr, ix, iy, nmax)
+
+    delta_energy = 0.5 * (en1 - en0)
+
+    if delta_energy <= 0.0:
+        return 1
+
+    if Ts > 0.0:
+        boltz = np.exp(-delta_energy / Ts)
+        if boltz >= np.random.uniform(0.0, 1.0):
+            return 1
+
+    arr[ix, iy] -= ang
+    return 0
 #=======================================================================
 @jit(nopython=True, parallel=True)
 def MC_step(arr,Ts,nmax):
@@ -243,28 +304,28 @@ def MC_step(arr,Ts,nmax):
     # with temperature.
     scale=0.1+Ts
     accept = 0
-    xran = np.random.randint(0,high=nmax, size=(nmax,nmax))
-    yran = np.random.randint(0,high=nmax, size=(nmax,nmax))
-    aran = np.random.normal(0.0, scale, size=(nmax,nmax))
-    for i in prange(nmax):
-        for j in prange(nmax):
-            ix = xran[i,j]
-            iy = yran[i,j]
-            ang = aran[i,j]
-            en0 = one_energy(arr,ix,iy,nmax)
-            arr[ix,iy] += ang
-            en1 = one_energy(arr,ix,iy,nmax)
-            if en1<=en0:
-                accept += 1
-            else:
-            # Now apply the Monte Carlo test - compare
-            # exp( -(E_new - E_old) / T* ) >= rand(0,1)
-                boltz = np.exp( -(en1 - en0) / Ts )
 
-                if boltz >= np.random.uniform(0.0,1.0):
-                    accept += 1
-                else:
-                    arr[ix,iy] -= ang
+    if nmax % 2 == 0:
+        # Two checkerboard colours. The colour loop is deliberately
+        # sequential; sites within each colour are updated in parallel.
+        for colour in range(2):
+            accepted_colour = 0
+
+            for i in prange(nmax):
+                for j in range(nmax):
+                    if (i + j) % 2 == colour:
+                        accepted_colour += _attempt_update(
+                            arr, i, j, Ts, nmax, scale
+                        )
+
+            accept += accepted_colour
+    else:
+        # Safe fallback for odd-sized periodic lattices.
+        for attempt in range(nmax * nmax):
+            ix = np.random.randint(0, nmax)
+            iy = np.random.randint(0, nmax)
+            accept += _attempt_update(arr, ix, iy, Ts, nmax, scale)
+
     return accept/(nmax*nmax)
 #=======================================================================
 def main(program, nsteps, nmax, temp, pflag):
@@ -294,9 +355,18 @@ def main(program, nsteps, nmax, temp, pflag):
     ratio[0] = 0.5 # ideal value
     order[0] = get_order(lattice,nmax)
 
+    # Warm up compiled functions before timing, so JIT compilation is
+    # not included in the measured simulation runtime.
+    if nmax % 2 == 0:
+        MC_step(lattice.copy(), temp, nmax)
+    else:
+        MC_step(lattice.copy(), temp, nmax)
+    get_order(lattice, nmax)
+    all_energy(lattice, nmax)
+
     # Begin doing and timing some MC steps.
     initial = time.time()
-    for it in prange(1,nsteps+1):
+    for it in range(1,nsteps+1):
         ratio[it] = MC_step(lattice,temp,nmax)
         energy[it] = all_energy(lattice,nmax)
         order[it] = get_order(lattice,nmax)
@@ -304,7 +374,7 @@ def main(program, nsteps, nmax, temp, pflag):
     runtime = final-initial
     
     # Final outputs
-    print("{}: Size: {:d}, Steps: {:d}, T*: {:5.3f}: Order: {:5.3f}, Time: {:8.6f} s".format(program, nmax,nsteps,temp,order[nsteps-1],runtime))
+    print("{}: Size: {:d}, Steps: {:d}, T*: {:5.3f}: Order: {:5.3f}, Time: {:8.6f} s".format(program, nmax,nsteps,temp,order[nsteps],runtime))
     # Plot final frame of lattice and generate output file
     savedat(lattice,nsteps,temp,runtime,ratio,energy,order,nmax)
     plotdat(lattice,pflag,nmax)
