@@ -9,7 +9,7 @@ This version in 2D.
 
 Run at the command line by typing:
 
-python setup.py 
+python setup.py build_ext -fi
 python run.py <ITERATIONS> <SIZE> <TEMPERATURE> <PLOTFLAG>
 
 where:
@@ -34,7 +34,14 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib as mpl
 
+cimport cython
+cimport openmp
+from libc.math cimport cos, exp, sin
+from cython.parallel cimport prange
+
 #=======================================================================
+@cython.boundscheck(False)
+@cython.wraparound(False)
 def initdat(nmax):
     """
     Arguments:
@@ -49,6 +56,8 @@ def initdat(nmax):
     arr = np.random.random_sample((nmax,nmax))*2.0*np.pi
     return arr
 #=======================================================================
+@cython.boundscheck(False)
+@cython.wraparound(False)
 def plotdat(arr,pflag,nmax):
     """
     Arguments:
@@ -96,6 +105,8 @@ def plotdat(arr,pflag,nmax):
     ax.set_aspect('equal')
     plt.show()
 #=======================================================================
+@cython.boundscheck(False)
+@cython.wraparound(False)
 def savedat(arr,nsteps,Ts,runtime,ratio,energy,order,nmax):
     """
     Arguments:
@@ -133,7 +144,14 @@ def savedat(arr,nsteps,Ts,runtime,ratio,energy,order,nmax):
         print("   {:05d}    {:6.4f} {:12.4f}  {:6.4f} ".format(i,ratio[i],energy[i],order[i]),file=FileOut)
     FileOut.close()
 #=======================================================================
-def one_energy(arr,ix,iy,nmax):
+@cython.boundscheck(False)
+@cython.wraparound(False)
+cdef inline double one_energy(
+    double[:, ::1] arr,
+    Py_ssize_t ix,
+    Py_ssize_t iy,
+    Py_ssize_t nmax
+) noexcept nogil:
     """
     Arguments:
 	  arr (float(nmax,nmax)) = array that contains lattice data;
@@ -148,26 +166,46 @@ def one_energy(arr,ix,iy,nmax):
 	Returns:
 	  en (float) = reduced energy of cell.
     """
-    en = 0.0
-    ixp = (ix+1)%nmax # These are the coordinates
-    ixm = (ix-1)%nmax # of the neighbours
-    iyp = (iy+1)%nmax # with wraparound
-    iym = (iy-1)%nmax #
+    cdef double en = 0.0
+    cdef double ang
+    cdef double c
+    cdef Py_ssize_t ixp, ixm, iyp, iym
+
+    # Periodic boundary conditions
+    ixp = 0 if ix == nmax-1 else ix+1
+    ixm = nmax-1 if ix==0 else ix-1
+    iyp = 0 if iy == nmax-1 else iy+1
+    iym = nmax-1 if iy == 0 else iy-1
 #
 # Add together the 4 neighbour contributions
 # to the energy
 #
+    # Updated to use cos from libc.math instead of numpy
+    # Also avoids using square
     ang = arr[ix,iy]-arr[ixp,iy]
-    en += 0.5*(1.0 - 3.0*np.cos(ang)**2)
+    c = cos(ang)
+    en += 0.5*(1.0 - 3.0*c*c)
+
     ang = arr[ix,iy]-arr[ixm,iy]
-    en += 0.5*(1.0 - 3.0*np.cos(ang)**2)
+    c = cos(ang)
+    en += 0.5*(1.0 - 3.0*c*c)
+
     ang = arr[ix,iy]-arr[ix,iyp]
-    en += 0.5*(1.0 - 3.0*np.cos(ang)**2)
+    c = cos(ang)
+    en += 0.5*(1.0 - 3.0*c*c)
+
     ang = arr[ix,iy]-arr[ix,iym]
-    en += 0.5*(1.0 - 3.0*np.cos(ang)**2)
+    c = cos(ang)
+    en += 0.5*(1.0 - 3.0*c*c)
+
     return en
 #=======================================================================
-def all_energy(arr,nmax):
+@cython.boundscheck(False)
+@cython.wraparound(False)
+def all_energy(
+    double[:, ::1] arr,
+    Py_ssize_t nmax
+):
     """
     Arguments:
 	  arr (float(nmax,nmax)) = array that contains lattice data;
@@ -178,13 +216,20 @@ def all_energy(arr,nmax):
 	Returns:
 	  enall (float) = reduced energy of lattice.
     """
-    enall = 0.0
-    for i in range(nmax):
-        for j in range(nmax):
-            enall += one_energy(arr,i,j,nmax)
+    cdef double enall = 0.0
+    cdef Py_ssize_t i, j
+    with nogil:
+        for i in prange(nmax, schedule='static'):
+            for j in range(nmax):
+                enall += one_energy(arr,i,j,nmax)
     return enall
 #=======================================================================
-def get_order(arr,nmax):
+@cython.boundscheck(False)
+@cython.wraparound(False)
+def get_order(
+    double[:, ::1] arr,
+    Py_ssize_t nmax
+):
     """
     Arguments:
 	  arr (float(nmax,nmax)) = array that contains lattice data;
@@ -202,17 +247,34 @@ def get_order(arr,nmax):
     # Generate a 3D unit vector for each cell (i,j) and
     # put it in a (3,i,j) array.
     #
-    lab = np.vstack((np.cos(arr),np.sin(arr),np.zeros_like(arr))).reshape(3,nmax,nmax)
+    arr_np = np.asarray(arr)
+    lab_np = np.ascontiguousarray(
+        np.vstack((np.cos(arr_np),np.sin(arr_np),np.zeros_like(arr_np))).reshape(3,nmax,nmax),
+        dtype=np.float64)
+    cdef double [:, :, ::1] lab = lab_np
+    cdef Py_ssize_t a, b, i, j
+    cdef double acc
     for a in range(3):
-        for b in range(3):
-            for i in range(nmax):
-                for j in range(nmax):
-                    Qab[a,b] += 3*lab[a,i,j]*lab[b,i,j] - delta[a,b]
+        for b in range(a,3):
+            acc = 0.0
+            with nogil:
+                for i in prange(nmax, schedule='static'):
+                    for j in range(nmax):
+                        acc += 3.0*lab[a,i,j]*lab[b,i,j]
+            Qab[a,b] = acc - delta[a,b]*nmax*nmax
+            Qab[b,a] = Qab[a,b]
     Qab = Qab/(2*nmax*nmax)
     eigenvalues,eigenvectors = np.linalg.eig(Qab)
-    return eigenvalues.max()
+    return eigenvalues.real.max()
 #=======================================================================
-def MC_step(arr,Ts,nmax):
+@cython.boundscheck(False)
+@cython.wraparound(False)
+@cython.cdivision(True)
+def MC_step(
+    double [:, ::1] arr,
+    double Ts,
+    Py_ssize_t nmax
+):
     """
     Arguments:
 	  arr (float(nmax,nmax)) = array that contains lattice data;
@@ -234,32 +296,37 @@ def MC_step(arr,Ts,nmax):
     # of the distribution for the angle changes - increases
     # with temperature.
     scale=0.1+Ts
-    accept = 0
-    xran = np.random.randint(0,high=nmax, size=(nmax,nmax))
-    yran = np.random.randint(0,high=nmax, size=(nmax,nmax))
-    aran = np.random.normal(scale=scale, size=(nmax,nmax))
-    for i in range(nmax):
-        for j in range(nmax):
-            ix = xran[i,j]
-            iy = yran[i,j]
-            ang = aran[i,j]
-            en0 = one_energy(arr,ix,iy,nmax)
-            arr[ix,iy] += ang
-            en1 = one_energy(arr,ix,iy,nmax)
-            if en1<=en0:
-                accept += 1
-            else:
-            # Now apply the Monte Carlo test - compare
-            # exp( -(E_new - E_old) / T* ) >= rand(0,1)
-                boltz = np.exp( -(en1 - en0) / Ts )
+    cdef Py_ssize_t accept = 0
+    aran_np = np.random.normal(scale=scale, size=(nmax,nmax))
+    uran_np = np.random.uniform(0.0, 1.0, size=(nmax,nmax))
+    cdef double[:, ::1] aran = aran_np
+    cdef double[:, ::1] uran = uran_np
+    cdef Py_ssize_t i, j, parity
+    cdef double ang, en0, en1, boltz
+    with nogil:
+        for parity in range(2):
+            for i in prange(nmax, schedule='static'):
+                for j in range((i+parity) & 1, nmax, 2):
+                    ang = aran[i,j]
+                    en0 = one_energy(arr,i,j,nmax)
+                    arr[i,j] += ang
+                    en1 = one_energy(arr,i,j,nmax)
+                    if en1<=en0:
+                        accept += 1
+                    else:
+                    # Now apply the Monte Carlo test - compare
+                    # exp( -(E_new - E_old) / T* ) >= rand(0,1)
+                        boltz = exp( -(en1 - en0) / Ts )
 
-                if boltz >= np.random.uniform(0.0,1.0):
-                    accept += 1
-                else:
-                    arr[ix,iy] -= ang
-    return accept/(nmax*nmax)
+                        if boltz >= uran[i,j]:
+                            accept += 1
+                        else:
+                            arr[i,j] -= ang
+    return accept/(<double>(nmax*nmax))
 #=======================================================================
-def main(program, nsteps, nmax, temp, pflag):
+@cython.boundscheck(False)
+@cython.wraparound(False)
+def main(program, nsteps, nmax, temp, pflag, nthreads=0):
     """
     Arguments:
 	  program (string) = the name of the program;
@@ -272,8 +339,14 @@ def main(program, nsteps, nmax, temp, pflag):
     Returns:
       NULL
     """
+    if nmax %2 != 0:
+        raise ValueError("SIZE must be even for the checkerboard OpenMP update.")
+    if nthreads > 0:
+        openmp.omp_set_num_threads(nthreads)
+    nthreads_used = openmp.omp_get_max_threads()
+
     # Create and initialise lattice
-    lattice = initdat(nmax)
+    lattice = np.ascontiguousarray(initdat(nmax), dtype=np.float64)
     # Plot initial frame of lattice
     plotdat(lattice,pflag,nmax)
     # Create arrays to store energy, acceptance ratio and order parameter
@@ -296,7 +369,7 @@ def main(program, nsteps, nmax, temp, pflag):
     runtime = final-initial
     
     # Final outputs
-    print("{}: Size: {:d}, Steps: {:d}, T*: {:5.3f}: Order: {:5.3f}, Time: {:8.6f} s".format(program, nmax,nsteps,temp,order[nsteps-1],runtime))
+    print("{}: Size: {:d}, Steps: {:d}, T*: {:5.3f}: Order: {:5.3f}, Threads: {:d}, Time: {:8.6f} s".format(program, nmax,nsteps,temp,order[nsteps-1],nthreads_used,runtime))
     # Plot final frame of lattice and generate output file
     savedat(lattice,nsteps,temp,runtime,ratio,energy,order,nmax)
     plotdat(lattice,pflag,nmax)
