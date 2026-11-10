@@ -137,13 +137,10 @@ def savedat(arr,nsteps,Ts,runtime,ratio,energy,order,nmax):
         print("   {:05d}    {:6.4f} {:12.4f}  {:6.4f} ".format(i,ratio[i],energy[i],order[i]),file=FileOut)
     FileOut.close()
 #=======================================================================
-# @vectorize(['float64(float64)'], target='parallel')
-# def energy_term(ang):
-#     return 0.5*(1.0-3.0*np.cos(ang)**2)
 @vectorize(['float64(float64)'], target='parallel')
 def pair_energy(ang):
     return 0.5 * (1.0 - 3.0 * np.cos(ang) ** 2)
-
+#=======================================================================
 def site_energy_grid(arr):
     """
     Return the local energy at every lattice site using array operations.
@@ -186,15 +183,20 @@ def one_energy(arr,ix,iy,nmax):
 # Add together the 4 neighbour contributions
 # to the energy
 #
-    angs = np.array([
-        arr[ix,iy] - arr[ixp,iy],
-        arr[ix,iy] - arr[ixm,iy],
-        arr[ix,iy] - arr[ix,iyp],
-        arr[ix,iy] - arr[ix,iym]
-    ])
-    return np.sum(0.5 * (1.0 - 3.0 * np.cos(angs)**2))
+    ang = arr[ix, iy] - arr[ixp, iy]
+    en += 0.5 * (1.0 - 3.0 * np.cos(ang) ** 2)
+
+    ang = arr[ix, iy] - arr[ixm, iy]
+    en += 0.5 * (1.0 - 3.0 * np.cos(ang) ** 2)
+
+    ang = arr[ix, iy] - arr[ix, iyp]
+    en += 0.5 * (1.0 - 3.0 * np.cos(ang) ** 2)
+
+    ang = arr[ix, iy] - arr[ix, iym]
+    en += 0.5 * (1.0 - 3.0 * np.cos(ang) ** 2)
+
+    return en
 #=======================================================================
-@jit(nopython=True)
 def all_energy(arr,nmax):
     """
     Arguments:
@@ -206,7 +208,7 @@ def all_energy(arr,nmax):
 	Returns:
 	  enall (float) = reduced energy of lattice.
     """
-    enall = np.sum(site_energy_grid)
+    enall = np.sum(site_energy_grid(arr))
     return enall
 #=======================================================================
 @jit(nopython=True, parallel=True)
